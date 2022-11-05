@@ -2,11 +2,60 @@ use tracing::{error, info, warn};
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 use wgpu::include_wgsl;
+use wgpu::util::DeviceExt;
 use winit::{
     event::*,
     event_loop::{ControlFlow, EventLoop},
     window::{Window, WindowBuilder},
 };
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct Vertex {
+    position: [f32; 3],
+    color: [f32; 3],
+}
+
+impl Vertex {
+    const ATTRIBS: [wgpu::VertexAttribute; 2] =
+        wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3];
+
+    fn desc<'a>() -> wgpu::VertexBufferLayout<'a> {
+        use std::mem;
+
+        wgpu::VertexBufferLayout {
+            array_stride: mem::size_of::<Self>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &Self::ATTRIBS,
+        }
+    }
+}
+
+const VERTICES: &[Vertex] = &[
+    Vertex {
+        position: [-0.0868241, 0.49240386, 0.0],
+        color: [0.5, 0.0, 0.5],
+    }, // A
+    Vertex {
+        position: [-0.49513406, 0.06958647, 0.0],
+        color: [0.5, 0.0, 0.5],
+    }, // B
+    Vertex {
+        position: [-0.21918549, -0.44939706, 0.0],
+        color: [0.5, 0.0, 0.5],
+    }, // C
+    Vertex {
+        position: [0.35966998, -0.3473291, 0.0],
+        color: [0.5, 0.0, 0.5],
+    }, // D
+    Vertex {
+        position: [0.44147372, 0.2347359, 0.0],
+        color: [0.5, 0.0, 0.5],
+    }, // E
+];
+
+const INDICES: &[u16] = &[0, 1, 4, 1, 2, 4, 2, 3, 4];
+
 struct State {
     surface: wgpu::Surface,
     device: wgpu::Device,
@@ -15,6 +64,10 @@ struct State {
     size: winit::dpi::PhysicalSize<u32>,
     clear_color: wgpu::Color,
     render_pipeline: wgpu::RenderPipeline,
+    vertex_buffer: wgpu::Buffer,
+    num_vertices: u32,
+    index_buffer: wgpu::Buffer,
+    num_indices: u32,
 }
 
 impl State {
@@ -80,8 +133,8 @@ impl State {
             layout: Some(&render_pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
-                entry_point: "vs_main", // 1.
-                buffers: &[],           // 2.
+                entry_point: "vs_main",     // 1.
+                buffers: &[Vertex::desc()], // 2.
             },
             fragment: Some(wgpu::FragmentState {
                 // 3.
@@ -117,6 +170,20 @@ impl State {
 
         surface.configure(&device, &config);
 
+        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Vertex Buffer"),
+            contents: bytemuck::cast_slice(VERTICES),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        let num_vertices = VERTICES.len() as u32;
+
+        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Index Buffer"),
+            contents: bytemuck::cast_slice(INDICES),
+            usage: wgpu::BufferUsages::INDEX,
+        });
+        let num_indices = INDICES.len() as u32;
+
         Self {
             surface,
             device,
@@ -125,6 +192,10 @@ impl State {
             size,
             clear_color,
             render_pipeline,
+            vertex_buffer,
+            num_vertices,
+            index_buffer,
+            num_indices,
         }
     }
 
@@ -142,7 +213,7 @@ impl State {
             WindowEvent::CursorMoved {
                 device_id: _,
                 position,
-                modifiers: _,
+                ..
             } => {
                 let r = position.x / self.size.width as f64;
                 let g = position.y / self.size.width as f64;
@@ -152,6 +223,13 @@ impl State {
                     b: 0.3,
                     a: 1.0,
                 }
+            }
+            WindowEvent::KeyboardInput {
+                device_id: _,
+                input,
+                ..
+            } => {
+                info!(input.scancode);
             }
             _ => {}
         }
@@ -187,7 +265,9 @@ impl State {
                 depth_stencil_attachment: None,
             });
             render_pass.set_pipeline(&self.render_pipeline); // 2.
-            render_pass.draw(0..3, 0..1); // 3.
+            render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+            render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16); // 1.
+            render_pass.draw_indexed(0..self.num_indices, 0, 0..1); // 2.
         }
 
         // submit will accept anything that implements IntoIter
